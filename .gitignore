@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+*.pt
+*.onnx
+model-export/*_saved_model/
+model-export/*.tflite
+
+# Android / Gradle / IntelliJ
+build/
+android-app/build/
+android-app/app/build/
+.gradle/
+android-app/.gradle/
+.idea/
+android-app/.idea/
+local.properties
+android-app/local.properties
+*.iml
+*.apk
+*.aab
+*.ap_
+*.dex
+.cxx/
+captures/
+*.jks
+*.keystore
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
