@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BlindVision</string>
+    <string name="camera_permission_rationale">BlindVision requires camera access to detect nearby obstacles and announce them aloud offline.</string>
+    <string name="grant_camera_permission">Grant Camera Permission</string>
+    <string name="permission_denied_notice">Camera permission is denied. Enable camera access in system settings to start live detection.</string>
+    <string name="open_app_settings">Open App Settings</string>
+</resources>
