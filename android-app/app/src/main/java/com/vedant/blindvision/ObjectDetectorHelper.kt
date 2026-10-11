@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.os.SystemClock
+import android.speech.tts.TextToSpeech
 import androidx.camera.core.ImageProxy
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.support.common.FileUtil
@@ -24,10 +25,15 @@ import kotlin.math.min
 class ObjectDetectorHelper(
     private val context: Context,
     @Volatile var confidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD,
+    @Volatile private var muted: Boolean = false
 ) {
     private val interpreterLock = Any()
     private var interpreter: Interpreter? = null
+    private var tts: TextToSpeech? = null
     private val labels: List<String>
+
+    @Volatile
+    private var isTtsReady: Boolean = false
 
     @Volatile
     private var isClosed: Boolean = false
@@ -36,6 +42,7 @@ class ObjectDetectorHelper(
     var modelStatus: String = "Initializing..."
         private set
 
+    private var lastSpokenMs: Long = -SPEECH_COOLDOWN_MS
     private var lastFrameTimestampNs: Long = 0L
     private var smoothedFps: Float = 0f
 
@@ -64,6 +71,20 @@ class ObjectDetectorHelper(
     init {
         labels = loadLabels()
         initializeInterpreter()
+        initializeTextToSpeech()
+    }
+
+    /**
+     * Updates audio mute state and immediately interrupts active speech when muted.
+     */
+    fun setMuted(isMuted: Boolean) {
+        muted = isMuted
+        if (isMuted) {
+            try {
+                tts?.stop()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /**
@@ -124,6 +145,7 @@ class ObjectDetectorHelper(
 
         val threshold = confidenceThreshold.coerceIn(0.05f, 0.99f)
         val detections = parseDetections(threshold)
+        maybeSpeakTopDetection(detections)
 
         val endNs = SystemClock.elapsedRealtimeNanos()
         val latencyMs = max(1L, (endNs - startNs) / 1_000_000L)
@@ -151,6 +173,14 @@ class ObjectDetectorHelper(
             } finally {
                 interpreter = null
             }
+        }
+        try {
+            tts?.stop()
+            tts?.shutdown()
+        } catch (_: Exception) {
+        } finally {
+            tts = null
+            isTtsReady = false
         }
     }
 
@@ -183,6 +213,19 @@ class ObjectDetectorHelper(
         } catch (exc: Exception) {
             interpreter = null
             modelStatus = "Model error: ${exc.localizedMessage ?: "initialization failed"}"
+        }
+    }
+
+    private fun initializeTextToSpeech() {
+        tts = TextToSpeech(context.applicationContext) { status ->
+            if (isClosed) return@TextToSpeech
+            if (status == TextToSpeech.SUCCESS) {
+                val langStatus = tts?.setLanguage(Locale.US)
+                isTtsReady = langStatus != TextToSpeech.LANG_MISSING_DATA &&
+                    langStatus != TextToSpeech.LANG_NOT_SUPPORTED
+            } else {
+                isTtsReady = false
+            }
         }
     }
 
@@ -484,6 +527,27 @@ class ObjectDetectorHelper(
         val raw = labels.getOrNull(classIndex) ?: return "Object $classIndex"
         return raw.replaceFirstChar { ch ->
             if (ch.isLowerCase()) ch.titlecase(Locale.US) else ch.toString()
+        }
+    }
+
+    private fun maybeSpeakTopDetection(detections: List<DetectionResult>) {
+        if (muted || !isTtsReady || detections.isEmpty()) return
+        val engine = tts ?: return
+        if (engine.isSpeaking) return
+
+        val nowMs = SystemClock.elapsedRealtime()
+        if (nowMs - lastSpokenMs < SPEECH_COOLDOWN_MS) return
+
+        val topDetection = detections.maxByOrNull { it.confidence } ?: return
+        val utterance = "${topDetection.label} ${topDetection.proximity}, ${topDetection.direction}"
+        val result = engine.speak(
+            utterance,
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "blindvision_$nowMs"
+        )
+        if (result == TextToSpeech.SUCCESS) {
+            lastSpokenMs = nowMs
         }
     }
 
