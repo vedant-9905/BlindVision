@@ -14,19 +14,36 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview as CameraPreview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -34,24 +51,51 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 private val DetectionGreen = Color(0xFF00FF88)
+private val HudSurfaceColor = Color(0xCC0A110E)
+private val HudBorderColor = Color(0x4000FF88)
+private val WarningAmber = Color(0xFFFFB74D)
+private val MutedRed = Color(0xFFFF5252)
 
 class MainActivity : ComponentActivity() {
 
@@ -133,15 +177,7 @@ private fun BlindVisionApp(lifecycleOwner: LifecycleOwner) {
         color = Color.Black
     ) {
         if (hasCameraPermission) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Camera permission granted — initializing BlindVision...",
-                    color = Color.White
-                )
-            }
+            LiveDetectionScreen(lifecycleOwner = lifecycleOwner)
         } else {
             PermissionPromptScreen(
                 showSettingsHint = permissionRequestedOnce,
@@ -157,6 +193,132 @@ private fun BlindVisionApp(lifecycleOwner: LifecycleOwner) {
         }
     }
 }
+
+@Composable
+private fun LiveDetectionScreen(lifecycleOwner: LifecycleOwner) {
+    val context = LocalContext.current
+    val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
+
+    var confidenceThreshold by remember {
+        mutableFloatStateOf(ObjectDetectorHelper.DEFAULT_CONFIDENCE_THRESHOLD)
+    }
+    var isMuted by remember { mutableStateOf(false) }
+
+    val detectorHelper = remember(context) {
+        ObjectDetectorHelper(
+            context = context,
+            confidenceThreshold = ObjectDetectorHelper.DEFAULT_CONFIDENCE_THRESHOLD,
+            muted = false
+        )
+    }
+
+    var telemetry by remember {
+        mutableStateOf(FrameTelemetry(modelStatus = detectorHelper.modelStatus))
+    }
+    var cameraError by remember { mutableStateOf<String?>(null) }
+
+    val analysisExecutor: ExecutorService = remember {
+        Executors.newSingleThreadExecutor()
+    }
+
+    val previewView = remember(context) {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+        }
+    }
+
+    DisposableEffect(detectorHelper, analysisExecutor) {
+        onDispose {
+            analysisExecutor.shutdown()
+            detectorHelper.close()
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, previewView) {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        var boundProvider: ProcessCameraProvider? = null
+        var isDisposed = false
+
+        cameraProviderFuture.addListener(
+            {
+                if (isDisposed) return@addListener
+                try {
+                    val provider = cameraProviderFuture.get()
+                    boundProvider = provider
+
+                    val previewUseCase = CameraPreview.Builder()
+                        .build()
+                        .apply {
+                            setSurfaceProvider(previewView.surfaceProvider)
+                        }
+
+                    val imageAnalysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                        .build()
+
+                    imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
+                        try {
+                            val result = detectorHelper.detect(imageProxy)
+                            if (!isDisposed) {
+                                mainExecutor.execute {
+                                    telemetry = result
+                                }
+                            }
+                        } finally {
+                            imageProxy.close()
+                        }
+                    }
+
+                    val cameraSelector = when {
+                        provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) ->
+                            CameraSelector.DEFAULT_BACK_CAMERA
+                        provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) ->
+                            CameraSelector.DEFAULT_FRONT_CAMERA
+                        else -> throw IllegalStateException("No camera hardware available")
+                    }
+
+                    provider.unbindAll()
+                    provider.bindToLifecycle(
+                        lifecycleOwner,
+                        cameraSelector,
+                        previewUseCase,
+                        imageAnalysis
+                    )
+                    cameraError = null
+                } catch (exc: Exception) {
+                    cameraError = exc.localizedMessage ?: "Failed to start camera"
+                }
+            },
+            mainExecutor
+        )
+
+        onDispose {
+            isDisposed = true
+            boundProvider?.unbindAll()
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { previewView },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (cameraError != null) {
+            Text(
+                text = cameraError.orEmpty(),
+                color = WarningAmber,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(16.dp)
+            )
+        }
+    }
+}
+
 
 @Composable
 private fun PermissionPromptScreen(
