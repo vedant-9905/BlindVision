@@ -306,6 +306,11 @@ private fun LiveDetectionScreen(lifecycleOwner: LifecycleOwner) {
             modifier = Modifier.fillMaxSize()
         )
 
+        DetectionOverlayCanvas(
+            telemetry = telemetry,
+            modifier = Modifier.fillMaxSize()
+        )
+
         if (cameraError != null) {
             Text(
                 text = cameraError.orEmpty(),
@@ -319,6 +324,99 @@ private fun LiveDetectionScreen(lifecycleOwner: LifecycleOwner) {
     }
 }
 
+@Composable
+private fun DetectionOverlayCanvas(
+    telemetry: FrameTelemetry,
+    modifier: Modifier = Modifier
+) {
+    val textMeasurer = rememberTextMeasurer()
+    val labelStyle = remember {
+        TextStyle(
+            color = DetectionGreen,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+
+    Canvas(modifier = modifier) {
+        if (telemetry.detections.isEmpty()) return@Canvas
+
+        val canvasW = size.width
+        val canvasH = size.height
+        val srcW = telemetry.sourceWidth
+        val srcH = telemetry.sourceHeight
+
+        val drawnW: Float
+        val drawnH: Float
+        val offsetX: Float
+        val offsetY: Float
+
+        if (srcW > 0 && srcH > 0) {
+            val scale = max(canvasW / srcW.toFloat(), canvasH / srcH.toFloat())
+            drawnW = srcW * scale
+            drawnH = srcH * scale
+            offsetX = (canvasW - drawnW) * 0.5f
+            offsetY = (canvasH - drawnH) * 0.5f
+        } else {
+            drawnW = canvasW
+            drawnH = canvasH
+            offsetX = 0f
+            offsetY = 0f
+        }
+
+        val strokePx = 3.dp.toPx()
+        val cornerPx = 8.dp.toPx()
+        val badgeCornerPx = 6.dp.toPx()
+        val padH = 8.dp.toPx()
+        val padV = 4.dp.toPx()
+        val badgeGap = 4.dp.toPx()
+
+        clipRect {
+            for (detection in telemetry.detections) {
+                val box = detection.boundingBox
+                val left = box.left * drawnW + offsetX
+                val top = box.top * drawnH + offsetY
+                val right = box.right * drawnW + offsetX
+                val bottom = box.bottom * drawnH + offsetY
+
+                val boxW = right - left
+                val boxH = bottom - top
+                if (boxW <= 1f || boxH <= 1f) continue
+
+                drawRoundRect(
+                    color = DetectionGreen,
+                    topLeft = Offset(left, top),
+                    size = Size(boxW, boxH),
+                    cornerRadius = CornerRadius(cornerPx, cornerPx),
+                    style = Stroke(width = strokePx)
+                )
+
+                val pct = (detection.confidence * 100f).roundToInt()
+                val badgeText = "${detection.label} $pct% · ${detection.proximity} · ${detection.direction}"
+                val measured = textMeasurer.measure(text = badgeText, style = labelStyle)
+
+                val badgeW = measured.size.width + padH * 2f
+                val badgeH = measured.size.height + padV * 2f
+                val maxBadgeX = max(0f, canvasW - badgeW)
+                val badgeX = left.coerceIn(0f, maxBadgeX)
+                val preferredY = top - badgeH - badgeGap
+                val badgeY = if (preferredY >= 0f) preferredY else top.coerceIn(0f, max(0f, canvasH - badgeH))
+
+                drawRoundRect(
+                    color = Color(0xD907100C),
+                    topLeft = Offset(badgeX, badgeY),
+                    size = Size(badgeW, badgeH),
+                    cornerRadius = CornerRadius(badgeCornerPx, badgeCornerPx)
+                )
+
+                drawText(
+                    textLayoutResult = measured,
+                    topLeft = Offset(badgeX + padH, badgeY + padV)
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun PermissionPromptScreen(
