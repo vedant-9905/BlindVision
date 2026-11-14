@@ -311,16 +311,33 @@ private fun LiveDetectionScreen(lifecycleOwner: LifecycleOwner) {
             modifier = Modifier.fillMaxSize()
         )
 
-        if (cameraError != null) {
-            Text(
-                text = cameraError.orEmpty(),
-                color = WarningAmber,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(16.dp)
-            )
-        }
+        TopTelemetryHud(
+            telemetry = telemetry,
+            cameraError = cameraError,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+        )
+
+        BottomControlCard(
+            confidenceThreshold = confidenceThreshold,
+            isMuted = isMuted,
+            topDetection = telemetry.detections.maxByOrNull { it.confidence },
+            onThresholdChange = { updated ->
+                confidenceThreshold = updated
+                detectorHelper.confidenceThreshold = updated
+            },
+            onToggleMute = {
+                val nextMuted = !isMuted
+                isMuted = nextMuted
+                detectorHelper.setMuted(nextMuted)
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 16.dp)
+        )
     }
 }
 
@@ -419,6 +436,205 @@ private fun DetectionOverlayCanvas(
 }
 
 @Composable
+private fun TopTelemetryHud(
+    telemetry: FrameTelemetry,
+    cameraError: String?,
+    modifier: Modifier = Modifier
+) {
+    val isModelReady = telemetry.modelStatus.contains("Ready", ignoreCase = true)
+    val statusText = cameraError ?: telemetry.modelStatus
+    val statusAccent = when {
+        cameraError != null -> MutedRed
+        isModelReady -> DetectionGreen
+        else -> WarningAmber
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(color = HudSurfaceColor, shape = RoundedCornerShape(16.dp))
+            .border(width = 1.dp, color = HudBorderColor, shape = RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(color = statusAccent, shape = CircleShape)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = statusText,
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            MetricPill(
+                text = String.format(Locale.US, "%.1f FPS", telemetry.fps),
+                accent = DetectionGreen
+            )
+            MetricPill(
+                text = "${telemetry.inferenceTimeMs} ms",
+                accent = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun MetricPill(
+    text: String,
+    accent: Color
+) {
+    Box(
+        modifier = Modifier
+            .background(color = Color(0xFF16241E), shape = RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Text(
+            text = text,
+            color = accent,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+private fun BottomControlCard(
+    confidenceThreshold: Float,
+    isMuted: Boolean,
+    topDetection: DetectionResult?,
+    onThresholdChange: (Float) -> Unit,
+    onToggleMute: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val thresholdPercent = (confidenceThreshold * 100f).roundToInt()
+    val muteDescription = if (isMuted) {
+        "Audio alerts muted. Double tap to unmute audio."
+    } else {
+        "Audio alerts active. Double tap to mute audio."
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(color = HudSurfaceColor, shape = RoundedCornerShape(20.dp))
+            .border(width = 1.dp, color = HudBorderColor, shape = RoundedCornerShape(20.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Confidence Threshold",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = if (topDetection != null) {
+                        "Lead: ${topDetection.label} ${topDetection.proximity}, ${topDetection.direction}"
+                    } else {
+                        "Scanning surroundings offline..."
+                    },
+                    color = Color(0xFFB5C7BF),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Text(
+                text = "$thresholdPercent%",
+                color = DetectionGreen,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Slider(
+            value = confidenceThreshold,
+            onValueChange = onThresholdChange,
+            valueRange = 0.30f..0.90f,
+            colors = SliderDefaults.colors(
+                thumbColor = DetectionGreen,
+                activeTrackColor = DetectionGreen,
+                inactiveTrackColor = Color(0xFF2B3A33)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics {
+                    contentDescription = "Confidence threshold $thresholdPercent percent"
+                }
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Button(
+            onClick = onToggleMute,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isMuted) Color(0xFF2D1B1B) else DetectionGreen,
+                contentColor = if (isMuted) Color.White else Color(0xFF031A0F)
+            ),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .then(
+                    if (isMuted) {
+                        Modifier.border(
+                            width = 1.5.dp,
+                            color = MutedRed,
+                            shape = RoundedCornerShape(14.dp)
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
+                .semantics {
+                    contentDescription = muteDescription
+                }
+        ) {
+            Image(
+                imageVector = if (isMuted) SpeakerOffIcon else SpeakerOnIcon,
+                contentDescription = null,
+                colorFilter = ColorFilter.tint(
+                    if (isMuted) MutedRed else Color(0xFF031A0F)
+                ),
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = if (isMuted) "Audio Muted — Tap to Unmute" else "Audio Active — Tap to Mute",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
 private fun PermissionPromptScreen(
     showSettingsHint: Boolean,
     onRequestPermission: () -> Unit,
@@ -484,6 +700,123 @@ private fun PermissionPromptScreen(
                     fontWeight = FontWeight.SemiBold
                 )
             }
+        }
+    }
+}
+
+private val SpeakerOnIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "SpeakerOn",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(3f, 9f)
+            verticalLineTo(15f)
+            horizontalLineTo(7f)
+            lineTo(12f, 20f)
+            verticalLineTo(4f)
+            lineTo(7f, 9f)
+            horizontalLineTo(3f)
+            close()
+            moveTo(16.5f, 12f)
+            curveTo(16.5f, 10.23f, 15.48f, 8.71f, 14f, 7.97f)
+            verticalLineTo(16.02f)
+            curveTo(15.48f, 15.29f, 16.5f, 13.77f, 16.5f, 12f)
+            close()
+            moveTo(14f, 3.23f)
+            verticalLineTo(5.29f)
+            curveTo(16.89f, 6.15f, 19f, 8.83f, 19f, 12f)
+            curveTo(19f, 15.17f, 16.89f, 17.85f, 14f, 18.71f)
+            verticalLineTo(20.77f)
+            curveTo(18.01f, 19.86f, 21f, 16.28f, 21f, 12f)
+            curveTo(21f, 7.72f, 18.01f, 4.14f, 14f, 3.23f)
+            close()
+        }
+    }.build()
+}
+
+private val SpeakerOffIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "SpeakerOff",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(16.5f, 12f)
+            curveTo(16.5f, 10.23f, 15.48f, 8.71f, 14f, 7.97f)
+            verticalLineTo(10.18f)
+            lineTo(16.45f, 12.63f)
+            curveTo(16.48f, 12.43f, 16.5f, 12.22f, 16.5f, 12f)
+            close()
+            moveTo(19f, 12f)
+            curveTo(19f, 12.94f, 18.8f, 13.82f, 18.46f, 14.64f)
+            lineTo(19.97f, 16.15f)
+            curveTo(20.63f, 14.91f, 21f, 13.5f, 21f, 12f)
+            curveTo(21f, 7.72f, 18.01f, 4.14f, 14f, 3.23f)
+            verticalLineTo(5.29f)
+            curveTo(16.89f, 6.15f, 19f, 8.83f, 19f, 12f)
+            close()
+            moveTo(4.27f, 3f)
+            lineTo(3f, 4.27f)
+            lineTo(7.73f, 9f)
+            horizontalLineTo(3f)
+            verticalLineTo(15f)
+            horizontalLineTo(7f)
+            lineTo(12f, 20f)
+            verticalLineTo(13.27f)
+            lineTo(16.25f, 17.52f)
+            curveTo(15.58f, 18.04f, 14.83f, 18.45f, 14f, 18.7f)
+            verticalLineTo(20.76f)
+            curveTo(15.38f, 20.45f, 16.63f, 19.81f, 17.69f, 18.95f)
+            lineTo(19.73f, 21f)
+            lineTo(21f, 19.73f)
+            lineTo(12f, 10.73f)
+            lineTo(4.27f, 3f)
+            close()
+            moveTo(12f, 4f)
+            lineTo(9.91f, 6.09f)
+            lineTo(12f, 8.18f)
+            verticalLineTo(4f)
+            close()
+        }
+    }.build()
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF000000)
+@Composable
+private fun ControlsOverlayPreview() {
+    BlindVisionTheme {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            TopTelemetryHud(
+                telemetry = FrameTelemetry(
+                    fps = 24.5f,
+                    inferenceTimeMs = 36L,
+                    modelStatus = "YOLOv8n FP16 Ready"
+                ),
+                cameraError = null,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(16.dp)
+            )
+            BottomControlCard(
+                confidenceThreshold = 0.60f,
+                isMuted = false,
+                topDetection = null,
+                onThresholdChange = {},
+                onToggleMute = {},
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp)
+            )
         }
     }
 }
