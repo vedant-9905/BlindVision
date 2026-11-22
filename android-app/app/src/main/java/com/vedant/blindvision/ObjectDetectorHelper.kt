@@ -28,6 +28,7 @@ class ObjectDetectorHelper(
     @Volatile private var muted: Boolean = false
 ) {
     private val interpreterLock = Any()
+    private val ttsLock = Any()
     private var interpreter: Interpreter? = null
     private var tts: TextToSpeech? = null
     private val labels: List<String>
@@ -80,9 +81,11 @@ class ObjectDetectorHelper(
     fun setMuted(isMuted: Boolean) {
         muted = isMuted
         if (isMuted) {
-            try {
-                tts?.stop()
-            } catch (_: Exception) {
+            synchronized(ttsLock) {
+                try {
+                    tts?.stop()
+                } catch (_: Exception) {
+                }
             }
         }
     }
@@ -174,13 +177,15 @@ class ObjectDetectorHelper(
                 interpreter = null
             }
         }
-        try {
-            tts?.stop()
-            tts?.shutdown()
-        } catch (_: Exception) {
-        } finally {
-            tts = null
-            isTtsReady = false
+        synchronized(ttsLock) {
+            try {
+                tts?.stop()
+                tts?.shutdown()
+            } catch (_: Exception) {
+            } finally {
+                tts = null
+                isTtsReady = false
+            }
         }
     }
 
@@ -217,14 +222,18 @@ class ObjectDetectorHelper(
     }
 
     private fun initializeTextToSpeech() {
-        tts = TextToSpeech(context.applicationContext) { status ->
-            if (isClosed) return@TextToSpeech
-            if (status == TextToSpeech.SUCCESS) {
-                val langStatus = tts?.setLanguage(Locale.US)
-                isTtsReady = langStatus != TextToSpeech.LANG_MISSING_DATA &&
-                    langStatus != TextToSpeech.LANG_NOT_SUPPORTED
-            } else {
-                isTtsReady = false
+        synchronized(ttsLock) {
+            tts = TextToSpeech(context.applicationContext) { status ->
+                synchronized(ttsLock) {
+                    if (isClosed) return@TextToSpeech
+                    if (status == TextToSpeech.SUCCESS) {
+                        val langStatus = tts?.setLanguage(Locale.US)
+                        isTtsReady = langStatus != TextToSpeech.LANG_MISSING_DATA &&
+                            langStatus != TextToSpeech.LANG_NOT_SUPPORTED
+                    } else {
+                        isTtsReady = false
+                    }
+                }
             }
         }
     }
@@ -531,23 +540,26 @@ class ObjectDetectorHelper(
     }
 
     private fun maybeSpeakTopDetection(detections: List<DetectionResult>) {
-        if (muted || !isTtsReady || detections.isEmpty()) return
-        val engine = tts ?: return
-        if (engine.isSpeaking) return
+        if (isClosed || muted || !isTtsReady || detections.isEmpty()) return
+        synchronized(ttsLock) {
+            if (isClosed || muted || !isTtsReady) return
+            val engine = tts ?: return
+            if (engine.isSpeaking) return
 
-        val nowMs = SystemClock.elapsedRealtime()
-        if (nowMs - lastSpokenMs < SPEECH_COOLDOWN_MS) return
+            val nowMs = SystemClock.elapsedRealtime()
+            if (nowMs - lastSpokenMs < SPEECH_COOLDOWN_MS) return
 
-        val topDetection = detections.maxByOrNull { it.confidence } ?: return
-        val utterance = "${topDetection.label} ${topDetection.proximity}, ${topDetection.direction}"
-        val result = engine.speak(
-            utterance,
-            TextToSpeech.QUEUE_FLUSH,
-            null,
-            "blindvision_$nowMs"
-        )
-        if (result == TextToSpeech.SUCCESS) {
-            lastSpokenMs = nowMs
+            val topDetection = detections.maxByOrNull { it.confidence } ?: return
+            val utterance = "${topDetection.label} ${topDetection.proximity}, ${topDetection.direction}"
+            val result = engine.speak(
+                utterance,
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "blindvision_$nowMs"
+            )
+            if (result == TextToSpeech.SUCCESS) {
+                lastSpokenMs = nowMs
+            }
         }
     }
 
