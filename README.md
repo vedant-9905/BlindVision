@@ -61,3 +61,104 @@
 | **Android SDK** | `minSdk = 26`, `compileSdk = 34`, `targetSdk = 34`, Java 17, Kotlin `1.9.24` |
 
 ---
+
+## Repository Structure
+
+```text
+BlindVision/
+├── README.md
+├── .gitignore
+├── model-export/
+│   ├── requirements.txt
+│   └── export_tflite.py
+└── android-app/
+    ├── build.gradle.kts
+    ├── settings.gradle.kts
+    ├── gradle.properties
+    └── app/
+        ├── build.gradle.kts
+        ├── proguard-rules.pro
+        └── src/
+            └── main/
+                ├── AndroidManifest.xml
+                ├── assets/
+                │   └── coco_labels.txt
+                ├── res/
+                │   └── values/
+                │       ├── strings.xml
+                │       └── themes.xml
+                └── java/com/vedant/blindvision/
+                    ├── MainActivity.kt
+                    ├── ObjectDetectorHelper.kt
+                    └── DetectionResult.kt
+```
+
+---
+
+## Setup & Build Instructions
+
+### 1. Export `yolov8n_float16.tflite` into Android Assets
+
+The Android project expects `yolov8n_float16.tflite` inside `android-app/app/src/main/assets/`. If the model file is missing, the app boots safely and displays `"Model missing: run export_tflite.py"` in the top HUD instead of crashing.
+
+**Windows (PowerShell):**
+
+```powershell
+cd model-export
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python export_tflite.py
+```
+
+**macOS / Linux:**
+
+```bash
+cd model-export
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python export_tflite.py
+```
+
+`export_tflite.py` automatically downloads `yolov8n.pt` (if absent), exports FP16 TFLite (`imgsz=640, half=True`), and copies `yolov8n_float16.tflite` to `android-app/app/src/main/assets/yolov8n_float16.tflite`.
+
+---
+
+### 2. Build & Run the Android App
+
+#### Option A: Android Studio (Recommended)
+1. Open **Android Studio** and select **Open** -> choose the `android-app` folder.
+2. Allow Gradle sync to download dependencies (AGP `8.5.2`, Kotlin `1.9.24`, Jetpack Compose BOM `2024.06.00`, CameraX `1.3.4`, TensorFlow Lite `2.16.1`).
+3. Connect an Android device (Android 8.0 / API 26+) with USB debugging enabled and click **Run**.
+
+#### Option B: Command Line (`./gradlew` / Gradle)
+From inside `android-app/` (if using an existing Gradle wrapper or generating one via `gradle wrapper`):
+
+```bash
+cd android-app
+./gradlew assembleDebug
+```
+
+On Windows PowerShell:
+
+```powershell
+cd android-app
+.\gradlew.bat assembleDebug
+```
+
+To install the debug APK onto a connected device via ADB:
+
+```bash
+./gradlew installDebug
+```
+
+---
+
+## Usage & Accessibility Controls
+
+1. **Camera Permission:** Grant camera permission when prompted on first launch.
+2. **Audio Announcements:** Point the rear camera at surroundings. The highest-confidence detection is spoken aloud once every `1.5` seconds as `"<Label> <proximity>, <direction>"` (for example, `"Person near, Center"` or `"Chair ahead, Left"`).
+3. **Confidence Threshold Slider:** Adjust between `30%` and `90%` (`60%` default) at the bottom control card to balance recall vs. precision.
+4. **Mute / Unmute Toggle:** High-contrast button with TalkBack `contentDescription` to pause or resume audio announcements instantly.
+
